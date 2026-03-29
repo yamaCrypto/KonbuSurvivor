@@ -3,102 +3,110 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Mobile Rogue Shooter</title>
+    <title>Mobile Rogue - Character Fixed</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <style>
-        body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; touch-action: none; }
-        #game-container { border: 2px solid #333; }
+        body { margin: 0; background: #0a0a0a; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; touch-action: none; }
+        #game-container { border: 2px solid #444; border-radius: 8px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
     </style>
 </head>
 <body>
 <div id="game-container"></div>
 <script>
-// 縦型画面の設定
 const GAME_WIDTH = 450;
 const GAME_HEIGHT = 800;
-const HUD_HEIGHT = 150; // 上部のステータス領域
-const ROOM_WIDTH = GAME_WIDTH;
-const ROOM_HEIGHT = GAME_HEIGHT - 300; // 下部にスティック領域を確保
+const HUD_HEIGHT = 160;
+const STICK_AREA_HEIGHT = 220;
+const GAME_AREA_BOTTOM = GAME_HEIGHT - STICK_AREA_HEIGHT;
 const WALL_THICKNESS = 20;
 const DOOR_SIZE = 80;
-const MAP_SIZE = 3;
+const MAP_SIZE = 5;
 
 const config = {
     type: Phaser.AUTO,
-    width: GAME_WIDTH,
-    height: GAME_HEIGHT,
+    width: GAME_WIDTH, height: GAME_HEIGHT,
     parent: 'game-container',
-    physics: { default: 'arcade', arcade: { debug: false } },
+    physics: { default: 'arcade', arcade: { debug: false } }, // 当たり判定の確認はdebug: trueに
     scene: { preload: preload, create: create, update: update }
 };
 
 const game = new Phaser.Game(config);
 
 let player, enemies, bullets, walls, keys;
-let currentRoom = { x: 1, y: 1 };
+let currentRoom = { x: 2, y: 2 };
 let enemiesStorage = {};
 let isChangingRoom = false;
 let lastFired = 0;
 
-// ステータス
-let playerStats = { hp: 100, maxHp: 100, mp: 50, maxMp: 50, gold: 0 };
-let hudText, minimapGraphics;
+let playerStats = { hp: 100, maxHp: 100, mp: 50, maxMp: 50, gold: 0, weaponType: 'RANGE' };
+let hudText, hpLabel, mpLabel, barGraphics, minimapGraphics;
 
-// スティック用変数
-let joystickBase, joystickThumb;
-let joystickActive = false;
+let joystickBase, joystickThumb, joystickActive = false;
 let moveVector = new Phaser.Math.Vector2(0, 0);
+let isDashing = false;
 
-function preload() {}
+function preload() {
+    // 1. 画像パスをルートディレクトリに変更
+    this.load.image('konbu', 'image_0.png');
+}
 
 function create() {
-    // 物理グループ
     walls = this.physics.add.staticGroup();
     bullets = this.physics.add.group();
     enemies = this.physics.add.group();
 
-    // プレイヤー（ゲームエリア中央）
-    player = this.add.rectangle(GAME_WIDTH/2, GAME_HEIGHT/2, 25, 25, 0x00ff00);
+    // キャラクター作成
+    player = this.add.sprite(GAME_WIDTH/2, GAME_HEIGHT/2, 'konbu');
     this.physics.add.existing(player);
-    player.body.setCollideWorldBounds(true);
+    
+    // 画像サイズを適宜調整（元の図形が25x25程度だったので、それに合わせる例）
+    // 元の画像の解像度に合わせてこのsetScaleの値を調整してください
+    player.setScale(0.5); 
+    
+    // 物理ボディのサイズを調整（足元付近に当たり判定を設定する例）
+    // player.body.setSize(player.width * 0.4, player.height * 0.3);
+    // player.body.setOffset(player.width * 0.3, player.height * 0.7);
 
-    // キーボード（PC用）
     keys = this.input.keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT");
 
-    // --- HUD領域 (上部) ---
-    const hudBg = this.add.rectangle(GAME_WIDTH/2, HUD_HEIGHT/2, GAME_WIDTH, HUD_HEIGHT, 0x000000).setDepth(100);
-    hudText = this.add.text(20, 20, '', { fontSize: '18px', fill: '#fff' }).setDepth(101);
+    // --- HUD Base ---
+    this.add.rectangle(GAME_WIDTH/2, HUD_HEIGHT/2, GAME_WIDTH, HUD_HEIGHT, 0x1a1a1a).setDepth(100);
+    barGraphics = this.add.graphics().setDepth(101);
+    
+    hpLabel = this.add.text(30, 22, '', { fontSize: '12px', fill: '#fff', fontWeight: 'bold' }).setDepth(102);
+    mpLabel = this.add.text(30, 62, '', { fontSize: '12px', fill: '#fff', fontWeight: 'bold' }).setDepth(102);
+    hudText = this.add.text(30, 105, '', { fontSize: '16px', fill: '#aaa' }).setDepth(102);
+    
     minimapGraphics = this.add.graphics().setDepth(101);
 
-    // --- バーチャルスティック (下部) ---
-    const stickX = GAME_WIDTH / 2;
-    const stickY = GAME_HEIGHT - 100;
-    joystickBase = this.add.circle(stickX, stickY, 50, 0x555555, 0.5).setDepth(100);
-    joystickThumb = this.add.circle(stickX, stickY, 25, 0xcccccc, 0.8).setDepth(101);
+    // --- Controls ---
+    const stickX = 110, stickY = GAME_HEIGHT - 110;
+    joystickBase = this.add.circle(stickX, stickY, 60, 0x333333, 0.5).setDepth(100);
+    joystickThumb = this.add.circle(stickX, stickY, 30, 0xeeeeee, 0.8).setDepth(101);
 
-    this.input.on('pointerdown', (pointer) => {
-        if (pointer.y > HUD_HEIGHT) joystickActive = true;
+    // 大型化したボタン (Radius 45)
+    createButton.call(this, GAME_WIDTH - 160, GAME_HEIGHT - 110, "Weapon", 0x3a5afc, () => {
+        playerStats.weaponType = (playerStats.weaponType === 'RANGE') ? 'MELEE' : 'RANGE';
+        updateUI();
     });
-    this.input.on('pointermove', (pointer) => {
-        if (!joystickActive) return;
-        const dist = Phaser.Math.Distance.Between(stickX, stickY, pointer.x, pointer.y);
-        const angle = Phaser.Math.Angle.Between(stickX, stickY, pointer.x, pointer.y);
-        const maxDist = 50;
-        const clampedDist = Math.min(dist, maxDist);
-        
-        joystickThumb.x = stickX + Math.cos(angle) * clampedDist;
-        joystickThumb.y = stickY + Math.sin(angle) * clampedDist;
+    createButton.call(this, GAME_WIDTH - 60, GAME_HEIGHT - 110, "Ability", 0xfc3a5a, performDash.bind(this));
 
-        moveVector.setTo(Math.cos(angle), Math.sin(angle)).scale(clampedDist / maxDist);
+    this.input.on('pointerdown', (p) => {
+        if (Phaser.Math.Distance.Between(p.x, p.y, stickX, stickY) < 70) joystickActive = true;
+    });
+    this.input.on('pointermove', (p) => {
+        if (!joystickActive) return;
+        const angle = Phaser.Math.Angle.Between(stickX, stickY, p.x, p.y);
+        const dist = Math.min(Phaser.Math.Distance.Between(stickX, stickY, p.x, p.y), 60);
+        joystickThumb.setPosition(stickX + Math.cos(angle)*dist, stickY + Math.sin(angle)*dist);
+        moveVector.setTo(Math.cos(angle), Math.sin(angle)).scale(dist / 60);
     });
     this.input.on('pointerup', () => {
         joystickActive = false;
-        joystickThumb.x = stickX;
-        joystickThumb.y = stickY;
+        joystickThumb.setPosition(stickX, stickY);
         moveVector.setTo(0, 0);
     });
 
-    // 衝突判定
     this.physics.add.collider(player, walls);
     this.physics.add.overlap(bullets, enemies, handleBulletHit, null, this);
 
@@ -106,140 +114,175 @@ function create() {
     updateUI();
 }
 
-function update(time) {
-    if (isChangingRoom) return;
+function createButton(x, y, label, color, callback) {
+    const btn = this.add.circle(x, y, 45, color, 0.8).setInteractive().setDepth(100);
+    btn.setStrokeStyle(3, 0xffffff, 0.5);
+    this.add.text(x, y, label, { fontSize: '14px', fill: '#fff', fontWeight: 'bold' }).setOrigin(0.5).setDepth(101);
+    btn.on('pointerdown', callback);
+    btn.on('pointerdown', () => { btn.setScale(0.9); });
+    btn.on('pointerup', () => { btn.setScale(1.0); });
+    btn.on('pointerout', () => { btn.setScale(1.0); });
+}
 
-    // 移動入力（スティック優先、なければキーボード）
-    let vx = moveVector.x;
-    let vy = moveVector.y;
-
-    if (vx === 0 && vy === 0) {
-        if (keys.A.isDown || keys.LEFT.isDown) vx = -1;
-        else if (keys.D.isDown || keys.RIGHT.isDown) vx = 1;
-        if (keys.W.isDown || keys.UP.isDown) vy = -1;
-        else if (keys.S.isDown || keys.DOWN.isDown) vy = 1;
+function drawGlassBar(x, y, width, height, percent, color) {
+    const radius = 10;
+    barGraphics.fillStyle(0x000000, 0.5);
+    barGraphics.fillRoundedRect(x, y, width, height, radius);
+    
+    if (percent > 0) {
+        barGraphics.fillStyle(color, 1);
+        barGraphics.fillRoundedRect(x, y, width * percent, height, radius);
+        barGraphics.fillStyle(0xffffff, 0.3);
+        barGraphics.fillRoundedRect(x, y, width * percent, height / 2.5, {tl: radius, tr: radius, bl: 0, br: 0});
+        barGraphics.fillStyle(0x000000, 0.2);
+        barGraphics.fillRoundedRect(x, y + height * 0.7, width * percent, height * 0.3, {tl: 0, tr: 0, bl: radius, br: radius});
     }
-
-    const finalVel = new Phaser.Math.Vector2(vx, vy).normalize().scale(200);
-    player.body.setVelocity(finalVel.x, finalVel.y);
-
-    checkRoomChange.call(this);
-
-    // 自動攻撃
-    if (time > lastFired) {
-        let closest = this.physics.closest(player, enemies.getChildren());
-        if (closest) {
-            fireBullet.call(this, player, closest);
-            lastFired = time + 600;
-        }
-    }
-
-    enemies.getChildren().forEach(e => this.physics.moveToObject(e, player, 60));
+    barGraphics.lineStyle(2, 0xffffff, 0.1);
+    barGraphics.strokeRoundedRect(x, y, width, height, radius);
 }
 
 function updateUI() {
-    hudText.setText(`HP: ${playerStats.hp}  MP: ${playerStats.mp}\nGOLD: ${playerStats.gold}`);
+    barGraphics.clear();
+    const barW = 220;
+    const barH = 24;
     
-    // ミニマップ更新
+    drawGlassBar(25, 20, barW, barH, playerStats.hp / playerStats.maxHp, 0xe74c3c);
+    hpLabel.setText(`HP ${playerStats.hp}/${playerStats.maxHp}`);
+
+    drawGlassBar(25, 60, barW, barH, playerStats.mp / playerStats.maxMp, 0x3498db);
+    mpLabel.setText(`MP ${playerStats.mp}/${playerStats.maxMp}`);
+
+    hudText.setText(`GOLD: ${playerStats.gold}  [ ${playerStats.weaponType} MODE ]`);
+
     minimapGraphics.clear();
-    const size = 15;
-    const pad = 4;
-    const offX = GAME_WIDTH - (size + pad) * MAP_SIZE - 20;
+    const size = 12;
+    const pad = 3;
+    const totalMapSize = (size + pad) * MAP_SIZE;
+    const offX = GAME_WIDTH - totalMapSize - 25;
     const offY = 20;
+
     for (let y = 0; y < MAP_SIZE; y++) {
         for (let x = 0; x < MAP_SIZE; x++) {
-            minimapGraphics.fillStyle(x === currentRoom.x && y === currentRoom.y ? 0x00ff00 : 0x444444, 0.8);
-            minimapGraphics.fillRect(offX + x*(size+pad), offY + y*(size+pad), size, size);
+            const isCurrent = (x === currentRoom.x && y === currentRoom.y);
+            minimapGraphics.fillStyle(isCurrent ? 0x00ff00 : 0x333333, 0.8);
+            minimapGraphics.fillRoundedRect(offX + x*(size+pad), offY + y*(size+pad), size, size, 2);
         }
     }
 }
 
-function setupRoom() {
-    walls.clear(true, true);
-    enemies.clear(true, true);
-    createWalls.call(this);
-
-    const roomKey = `${currentRoom.x},${currentRoom.y}`;
-    if (enemiesStorage[roomKey]) {
-        enemiesStorage[roomKey].forEach(d => spawnEnemy.call(this, d.x, d.y, d.hp));
-    } else {
-        for(let i=0; i < Phaser.Math.Between(2, 4); i++) {
-            spawnEnemy.call(this, Phaser.Math.Between(50, GAME_WIDTH-50), Phaser.Math.Between(HUD_HEIGHT+50, GAME_HEIGHT-250), 3);
-        }
+function performDash() {
+    if (playerStats.mp >= 10 && !isDashing) {
+        playerStats.mp -= 10;
+        isDashing = true;
+        updateUI();
+        const dashVec = (moveVector.length() > 0.1) ? moveVector.clone().normalize() : 
+                        (keys.A.isDown||keys.D.isDown||keys.W.isDown||keys.S.isDown) ? 
+                        new Phaser.Math.Vector2(player.body.velocity.x, player.body.velocity.y).normalize() : 
+                        new Phaser.Math.Vector2(1, 0);
+        
+        player.body.setVelocity(dashVec.x * 850, dashVec.y * 850);
+        this.time.delayedCall(150, () => { isDashing = false; });
     }
 }
 
-function createWalls() {
-    const hw = GAME_WIDTH / 2;
-    const d = DOOR_SIZE / 2;
-    const bottomLimit = GAME_HEIGHT - 200; // ゲームエリアの下端
+function update(time) {
+    if (isChangingRoom) return;
 
-    // 上
-    if (currentRoom.y === 0) addWall.call(this, 0, HUD_HEIGHT, GAME_WIDTH, WALL_THICKNESS);
-    else { addWall.call(this, 0, HUD_HEIGHT, hw-d, WALL_THICKNESS); addWall.call(this, hw+d, HUD_HEIGHT, hw-d, WALL_THICKNESS); }
-    // 下
-    if (currentRoom.y === MAP_SIZE-1) addWall.call(this, 0, bottomLimit, GAME_WIDTH, WALL_THICKNESS);
-    else { addWall.call(this, 0, bottomLimit, hw-d, WALL_THICKNESS); addWall.call(this, hw+d, bottomLimit, hw-d, WALL_THICKNESS); }
-    // 左
-    if (currentRoom.x === 0) addWall.call(this, 0, HUD_HEIGHT, WALL_THICKNESS, bottomLimit-HUD_HEIGHT);
-    else { addWall.call(this, 0, HUD_HEIGHT, WALL_THICKNESS, (bottomLimit-HUD_HEIGHT)/2-d); addWall.call(this, 0, (bottomLimit+HUD_HEIGHT)/2+d, WALL_THICKNESS, (bottomLimit-HUD_HEIGHT)/2-d); }
-    // 右
-    if (currentRoom.x === MAP_SIZE-1) addWall.call(this, GAME_WIDTH-WALL_THICKNESS, HUD_HEIGHT, WALL_THICKNESS, bottomLimit-HUD_HEIGHT);
-    else { addWall.call(this, GAME_WIDTH-WALL_THICKNESS, HUD_HEIGHT, WALL_THICKNESS, (bottomLimit-HUD_HEIGHT)/2-d); addWall.call(this, GAME_WIDTH-WALL_THICKNESS, (bottomLimit+HUD_HEIGHT)/2+d, WALL_THICKNESS, (bottomLimit-HUD_HEIGHT)/2-d); }
-}
+    if (!isDashing) {
+        let vx = 0, vy = 0;
+        if (moveVector.length() > 0.1) { vx = moveVector.x; vy = moveVector.y; } 
+        else {
+            if (keys.A.isDown || keys.LEFT.isDown) vx = -1;
+            else if (keys.D.isDown || keys.RIGHT.isDown) vx = 1;
+            if (keys.W.isDown || keys.UP.isDown) vy = -1;
+            else if (keys.S.isDown || keys.DOWN.isDown) vy = 1;
+        }
+        
+        // --- 画像の反転処理を削除 ---
+        // 正面を向いているキャラなので、反転させない方が自然です。
 
-function addWall(x, y, w, h) {
-    let wall = this.add.rectangle(x + w/2, y + h/2, w, h, 0x444444);
-    walls.add(wall);
+        const finalVel = new Phaser.Math.Vector2(vx, vy).normalize().scale(210);
+        player.body.setVelocity(finalVel.x, finalVel.y);
+    }
+
+    checkRoomChange.call(this);
+
+    if (time > lastFired && playerStats.weaponType === 'RANGE') {
+        const activeEnemies = enemies.getChildren().filter(e => e.active);
+        const closest = this.physics.closest(player, activeEnemies);
+        if (closest) { fireBullet.call(this, player, closest); lastFired = time + 550; }
+    }
+    enemies.getChildren().forEach(e => { if (e.active) this.physics.moveToObject(e, player, 65); });
 }
 
 function checkRoomChange() {
-    const bottomLimit = GAME_HEIGHT - 200;
-    let next = { ...currentRoom };
-    let newPos = { x: player.x, y: player.y };
+    const margin = 10;
+    let next = { ...currentRoom }, newPos = { x: player.x, y: player.y }, changed = false;
 
-    if (player.x > GAME_WIDTH) { next.x++; newPos.x = 40; }
-    else if (player.x < 0) { next.x--; newPos.x = GAME_WIDTH-40; }
-    else if (player.y > bottomLimit) { next.y++; newPos.y = HUD_HEIGHT+40; }
-    else if (player.y < HUD_HEIGHT) { next.y--; newPos.y = bottomLimit-40; }
+    if (player.x >= GAME_WIDTH - margin) { next.x++; newPos.x = 40; changed = true; }
+    else if (player.x <= margin) { next.x--; newPos.x = GAME_WIDTH - 40; changed = true; }
+    else if (player.y >= GAME_AREA_BOTTOM - margin) { next.y++; newPos.y = HUD_HEIGHT + 40; changed = true; }
+    else if (player.y <= HUD_HEIGHT + margin) { next.y--; newPos.y = GAME_AREA_BOTTOM - 40; changed = true; }
 
-    if (next.x !== currentRoom.x || next.y !== currentRoom.y) {
-        if (next.x >= 0 && next.x < MAP_SIZE && next.y >= 0 && next.y < MAP_SIZE) {
-            isChangingRoom = true;
-            player.body.setVelocity(0);
-            saveEnemies();
-            this.cameras.main.fadeOut(200);
-            this.cameras.main.once('camerafadeoutcomplete', () => {
-                currentRoom = next; player.setPosition(newPos.x, newPos.y);
-                setupRoom.call(this); updateUI();
-                this.cameras.main.fadeIn(200);
-                this.cameras.main.once('camerafadeincomplete', () => isChangingRoom = false);
-            });
-        }
+    if (changed && next.x >= 0 && next.x < MAP_SIZE && next.y >= 0 && next.y < MAP_SIZE) {
+        isChangingRoom = true;
+        saveEnemies();
+        this.cameras.main.fadeOut(200);
+        this.cameras.main.once('camerafadeoutcomplete', () => {
+            currentRoom = next; player.setPosition(newPos.x, newPos.y);
+            setupRoom.call(this); updateUI();
+            this.cameras.main.fadeIn(200);
+            this.cameras.main.once('camerafadeincomplete', () => isChangingRoom = false);
+        });
     }
 }
 
 function saveEnemies() {
+    enemiesStorage[`${currentRoom.x},${currentRoom.y}`] = enemies.getChildren().map(e => ({ x: e.x, y: e.y, hp: e.hp }));
+}
+
+function setupRoom() {
+    walls.clear(true, true); enemies.clear(true, true);
+    createWalls.call(this);
     const key = `${currentRoom.x},${currentRoom.y}`;
-    enemiesStorage[key] = enemies.getChildren().map(e => ({ x: e.x, y: e.y, hp: e.hp }));
+    if (enemiesStorage[key]) {
+        enemiesStorage[key].forEach(d => spawnEnemy.call(this, d.x, d.y, d.hp));
+    } else {
+        const count = Phaser.Math.Between(2, 4);
+        for(let i=0; i<count; i++) spawnEnemy.call(this, Phaser.Math.Between(60, GAME_WIDTH-60), Phaser.Math.Between(HUD_HEIGHT+60, GAME_AREA_BOTTOM-60), 3);
+    }
+}
+
+function createWalls() {
+    const hw = GAME_WIDTH / 2, d = DOOR_SIZE / 2;
+    if (currentRoom.y === 0) addWall.call(this, 0, HUD_HEIGHT, GAME_WIDTH, WALL_THICKNESS);
+    else { addWall.call(this, 0, HUD_HEIGHT, hw-d, WALL_THICKNESS); addWall.call(this, hw+d, HUD_HEIGHT, hw-d, WALL_THICKNESS); }
+    if (currentRoom.y === MAP_SIZE-1) addWall.call(this, 0, GAME_AREA_BOTTOM, GAME_WIDTH, WALL_THICKNESS);
+    else { addWall.call(this, 0, GAME_AREA_BOTTOM, hw-d, WALL_THICKNESS); addWall.call(this, hw+d, GAME_AREA_BOTTOM, hw-d, WALL_THICKNESS); }
+    if (currentRoom.x === 0) addWall.call(this, 0, HUD_HEIGHT, WALL_THICKNESS, GAME_AREA_BOTTOM-HUD_HEIGHT);
+    else { const vh = GAME_AREA_BOTTOM-HUD_HEIGHT; addWall.call(this, 0, HUD_HEIGHT, WALL_THICKNESS, vh/2-d); addWall.call(this, 0, HUD_HEIGHT+vh/2+d, WALL_THICKNESS, vh/2-d); }
+    if (currentRoom.x === MAP_SIZE-1) addWall.call(this, GAME_WIDTH-WALL_THICKNESS, HUD_HEIGHT, WALL_THICKNESS, GAME_AREA_BOTTOM-HUD_HEIGHT);
+    else { const vh = GAME_AREA_BOTTOM-HUD_HEIGHT; addWall.call(this, GAME_WIDTH-WALL_THICKNESS, HUD_HEIGHT, WALL_THICKNESS, vh/2-d); addWall.call(this, GAME_WIDTH-WALL_THICKNESS, HUD_HEIGHT+vh/2+d, WALL_THICKNESS, vh/2-d); }
+}
+
+function addWall(x, y, w, h) {
+    walls.add(this.add.rectangle(x + w/2, y + h/2, w, h, 0x444444));
 }
 
 function spawnEnemy(x, y, hp) {
     const e = this.add.rectangle(x, y, 20, 20, 0xff0000);
-    this.physics.add.existing(e);
-    e.hp = hp; enemies.add(e);
+    this.physics.add.existing(e); e.hp = hp; enemies.add(e);
 }
 
 function handleBulletHit(bullet, enemy) {
     bullet.destroy();
-    enemy.hp -= PLAYER_DAMAGE;
+    enemy.hp -= 1;
     enemy.setFillStyle(0xffffff);
     this.time.delayedCall(50, () => { if(enemy.active) enemy.setFillStyle(0xff0000); });
     if (enemy.hp <= 0) {
         const amt = Phaser.Math.Between(5, 15);
-        playerStats.gold += amt;
-        updateUI();
-        const t = this.add.text(enemy.x, enemy.y, `+${amt}G`, { fill: '#ffd700' }).setOrigin(0.5);
+        playerStats.gold += amt; updateUI();
+        const t = this.add.text(enemy.x, enemy.y, `+${amt}G`, { fill: '#ffd700', fontWeight: 'bold' }).setOrigin(0.5);
         this.tweens.add({ targets: t, y: t.y-50, alpha: 0, duration: 800, onComplete: () => t.destroy() });
         enemy.destroy();
     }
@@ -248,7 +291,7 @@ function handleBulletHit(bullet, enemy) {
 function fireBullet(src, tgt) {
     const b = this.add.rectangle(src.x, src.y, 8, 8, 0xffff00);
     bullets.add(b);
-    this.physics.moveToObject(b, tgt, 350);
+    this.physics.moveToObject(b, tgt, 380);
     this.time.addEvent({ delay: 1000, callback: () => { if(b.active) b.destroy(); } });
 }
 </script>
