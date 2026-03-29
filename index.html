@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Rogue Shooter - HUD & Gold System</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+    </style>
+</head>
+<body>
+<div id="game-container"></div>
+<script>
+const ROOM_WIDTH = 800;
+const ROOM_HEIGHT = 600;
+const WALL_THICKNESS = 40;
+const DOOR_SIZE = 120;
+const MAP_SIZE = 3; 
+
+// ゲームバランス設定
+const PLAYER_DAMAGE = 1;
+const ENEMY_DEFAULT_HP = 3;
+
+const config = {
+    type: Phaser.AUTO,
+    width: ROOM_WIDTH,
+    height: ROOM_HEIGHT,
+    parent: 'game-container',
+    physics: { default: 'arcade', arcade: { debug: false } },
+    scene: { preload: preload, create: create, update: update }
+};
+
+const game = new Phaser.Game(config);
+
+let player, keys, bullets, enemies, walls;
+let lastFired = 0;
+let currentRoom = { x: 1, y: 1 };
+let enemiesStorage = {}; 
+let minimapGraphics, hudText;
+let isChangingRoom = false;
+
+// プレイヤー情報
+let playerStats = {
+    hp: 100,
+    maxHp: 100,
+    mp: 50,
+    maxMp: 50,
+    gold: 0
+};
+
+function preload() {}
+
+function create() {
+    walls = this.physics.add.staticGroup();
+    bullets = this.physics.add.group();
+    enemies = this.physics.add.group();
+
+    player = this.add.rectangle(400, 300, 30, 30, 0x00ff00);
+    this.physics.add.existing(player);
+
+    keys = this.input.keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT");
+
+    // --- HUD・UIの設定 ---
+    minimapGraphics = this.add.graphics().setScrollFactor(0).setDepth(100);
+    hudText = this.add.text(20, 20, '', {
+        fontSize: '18px',
+        fill: '#ffffff',
+        backgroundColor: '#000000aa',
+        padding: { x: 10, y: 5 }
+    }).setScrollFactor(0).setDepth(100);
+    updateHUD();
+
+    this.physics.add.collider(player, walls);
+    this.physics.add.overlap(bullets, enemies, handleBulletHit, null, this);
+
+    setupRoom.call(this);
+    updateMinimap();
+}
+
+function update(time) {
+    if (isChangingRoom) return;
+    handleMovement();
+    checkRoomChange.call(this);
+
+    if (time > lastFired) {
+        let closest = this.physics.closest(player, enemies.getChildren());
+        if (closest) {
+            fireBullet.call(this, player, closest);
+            lastFired = time + 500;
+        }
+    }
+
+    enemies.getChildren().forEach(e => {
+        this.physics.moveToObject(e, player, 80);
+    });
+}
+
+function handleMovement() {
+    let vx = 0, vy = 0;
+    if (keys.A.isDown || keys.LEFT.isDown) vx = -1;
+    else if (keys.D.isDown || keys.RIGHT.isDown) vx = 1;
+    if (keys.W.isDown || keys.UP.isDown) vy = -1;
+    else if (keys.S.isDown || keys.DOWN.isDown) vy = 1;
+
+    const vel = new Phaser.Math.Vector2(vx, vy).normalize().scale(250);
+    player.body.setVelocity(vel.x, vel.y);
+}
+
+// --- HUD更新 ---
+function updateHUD() {
+    hudText.setText(
+        `HP: ${playerStats.hp}/${playerStats.maxHp}\n` +
+        `MP: ${playerStats.mp}/${playerStats.maxMp}\n` +
+        `GOLD: ${playerStats.gold}`
+    );
+}
+
+// --- ゴールド獲得演出 ---
+function spawnGoldEffect(x, y) {
+    const amount = Phaser.Math.Between(5, 15);
+    playerStats.gold += amount;
+    updateHUD();
+
+    // テキスト演出
+    const goldText = this.add.text(x, y, `+${amount}G`, {
+        fontSize: '16px',
+        fill: '#ffd700',
+        fontWeight: 'bold'
+    }).setOrigin(0.5);
+
+    // ふわっと浮かび上がって消えるアニメーション
+    this.tweens.add({
+        targets: goldText,
+        y: y - 50,
+        alpha: 0,
+        duration: 800,
+        onComplete: () => goldText.destroy()
+    });
+}
+
+function handleBulletHit(bullet, enemy) {
+    bullet.destroy();
+    enemy.hp -= PLAYER_DAMAGE;
+
+    enemy.setFillStyle(0xffffff);
+    this.time.delayedCall(50, () => {
+        if (enemy.active) enemy.setFillStyle(0xff0000);
+    });
+
+    if (enemy.hp <= 0) {
+        spawnGoldEffect.call(this, enemy.x, enemy.y);
+        enemy.destroy();
+    }
+}
+
+// --- 部屋移動ロジック（変更なし） ---
+function checkRoomChange() {
+    let nextRoom = { ...currentRoom };
+    let newPos = { x: player.x, y: player.y };
+
+    if (player.x > ROOM_WIDTH) { nextRoom.x++; newPos.x = 60; }
+    else if (player.x < 0) { nextRoom.x--; newPos.x = ROOM_WIDTH - 60; }
+    else if (player.y > ROOM_HEIGHT) { nextRoom.y++; newPos.y = 60; }
+    else if (player.y < 0) { nextRoom.y--; newPos.y = ROOM_HEIGHT - 60; }
+
+    if (nextRoom.x !== currentRoom.x || nextRoom.y !== currentRoom.y) {
+        if (nextRoom.x >= 0 && nextRoom.x < MAP_SIZE && nextRoom.y >= 0 && nextRoom.y < MAP_SIZE) {
+            changeRoom.call(this, nextRoom, newPos);
+        }
+    }
+}
+
+function changeRoom(nextRoom, newPos) {
+    isChangingRoom = true;
+    player.body.setVelocity(0);
+    saveCurrentEnemies();
+
+    this.cameras.main.fadeOut(200, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => {
+        currentRoom = nextRoom;
+        player.setPosition(newPos.x, newPos.y);
+        setupRoom.call(this);
+        updateMinimap();
+        this.cameras.main.fadeIn(200, 0, 0, 0);
+        this.cameras.main.once('camerafadeincomplete', () => { isChangingRoom = false; });
+    });
+}
+
+function saveCurrentEnemies() {
+    const roomKey = `${currentRoom.x},${currentRoom.y}`;
+    const list = [];
+    enemies.getChildren().forEach(e => {
+        list.push({ x: e.x, y: e.y, hp: e.hp });
+    });
+    enemiesStorage[roomKey] = list;
+}
+
+function setupRoom() {
+    walls.clear(true, true);
+    enemies.clear(true, true);
+    createWalls.call(this);
+
+    const roomKey = `${currentRoom.x},${currentRoom.y}`;
+    if (enemiesStorage[roomKey]) {
+        enemiesStorage[roomKey].forEach(data => {
+            spawnEnemy.call(this, data.x, data.y, data.hp);
+        });
+    } else {
+        const count = Phaser.Math.Between(2, 5);
+        for(let i=0; i<count; i++) {
+            spawnEnemy.call(this, Phaser.Math.Between(150, 650), Phaser.Math.Between(150, 450), ENEMY_DEFAULT_HP);
+        }
+    }
+}
+
+function createWalls() {
+    const halfW = ROOM_WIDTH / 2;
+    const halfH = ROOM_HEIGHT / 2;
+    const d = DOOR_SIZE / 2;
+    if (currentRoom.y === 0) addWall.call(this, 0, 0, ROOM_WIDTH, WALL_THICKNESS);
+    else { addWall.call(this, 0, 0, halfW - d, WALL_THICKNESS); addWall.call(this, halfW + d, 0, halfW - d, WALL_THICKNESS); }
+    if (currentRoom.y === MAP_SIZE - 1) addWall.call(this, 0, ROOM_HEIGHT - WALL_THICKNESS, ROOM_WIDTH, WALL_THICKNESS);
+    else { addWall.call(this, 0, ROOM_HEIGHT - WALL_THICKNESS, halfW - d, WALL_THICKNESS); addWall.call(this, halfW + d, ROOM_HEIGHT - WALL_THICKNESS, halfW - d, WALL_THICKNESS); }
+    if (currentRoom.x === 0) addWall.call(this, 0, 0, WALL_THICKNESS, ROOM_HEIGHT);
+    else { addWall.call(this, 0, 0, WALL_THICKNESS, halfH - d); addWall.call(this, 0, halfH + d, WALL_THICKNESS, halfH - d); }
+    if (currentRoom.x === MAP_SIZE - 1) addWall.call(this, ROOM_WIDTH - WALL_THICKNESS, 0, WALL_THICKNESS, ROOM_HEIGHT);
+    else { addWall.call(this, ROOM_WIDTH - WALL_THICKNESS, 0, WALL_THICKNESS, halfH - d); addWall.call(this, ROOM_WIDTH - WALL_THICKNESS, halfH + d, WALL_THICKNESS, halfH - d); }
+}
+
+function addWall(x, y, w, h) {
+    let wall = this.add.rectangle(x + w/2, y + h/2, w, h, 0x444444);
+    walls.add(wall);
+}
+
+function spawnEnemy(x, y, hp) {
+    const enemy = this.add.rectangle(x, y, 20, 20, 0xff0000);
+    this.physics.add.existing(enemy);
+    enemy.hp = hp;
+    enemies.add(enemy);
+}
+
+function updateMinimap() {
+    minimapGraphics.clear();
+    const size = 20;
+    const padding = 5;
+    const offsetX = ROOM_WIDTH - (size + padding) * MAP_SIZE - 20;
+    const offsetY = 20;
+    for (let y = 0; y < MAP_SIZE; y++) {
+        for (let x = 0; x < MAP_SIZE; x++) {
+            const isCurrent = (x === currentRoom.x && y === currentRoom.y);
+            minimapGraphics.fillStyle(isCurrent ? 0x00ff00 : 0x555555, 0.8);
+            minimapGraphics.fillRect(offsetX + x * (size + padding), offsetY + y * (size + padding), size, size);
+        }
+    }
+}
+
+function fireBullet(source, target) {
+    const bullet = this.add.rectangle(source.x, source.y, 10, 10, 0xffff00);
+    bullets.add(bullet);
+    this.physics.moveToObject(bullet, target, 400);
+    this.time.addEvent({ delay: 1000, callback: () => { if(bullet.active) bullet.destroy(); } });
+}
+</script>
+</body>
+</html>
